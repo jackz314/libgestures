@@ -137,9 +137,8 @@ void TapRecord::Update(const HardwareState& hwstate,
        it != e; ++it) {
     const FingerState* fs = hwstate.GetFingerState((*it).first);
     if (fs) {
-      if (fs->pressure >= immediate_interpreter_->tap_min_pressure()) {
+      if (fs->pressure >= immediate_interpreter_->tap_min_pressure())
         min_tap_pressure_met_.insert(fs->tracking_id);
-      }
       if (fs->pressure >= cotap_min_pressure) {
         min_cotap_pressure_met_.insert(fs->tracking_id);
         if ((*it).second.pressure < cotap_min_pressure) {
@@ -149,8 +148,7 @@ void TapRecord::Update(const HardwareState& hwstate,
         }
       }
       stime_t finger_age = hwstate.timestamp -
-	immediate_interpreter_->finger_origin_timestamp(fs->tracking_id);
-
+          immediate_interpreter_->finger_origin_timestamp(fs->tracking_id);
       if (finger_age > immediate_interpreter_->tap_max_finger_age())
         fingers_below_max_age_ = false;
     }
@@ -1057,10 +1055,6 @@ ImmediateInterpreter::ImmediateInterpreter(PropRegistry* prop_reg,
       button_move_dist_(prop_reg, "Button Move Distance", 10.0),
       button_max_dist_from_expected_(prop_reg,
                                      "Button Max Distance From Expected", 20.0),
-      button_right_click_zone_enable_(prop_reg, 
-				      "Button Right Click Zone Enable", 1),
-      button_right_click_zone_size_(prop_reg, 
-				    "Button Right Click Zone Size", 20.0),
       keyboard_touched_timeval_high_(prop_reg, "Keyboard Touched Timeval High",
                                      0),
       keyboard_touched_timeval_low_(prop_reg, "Keyboard Touched Timeval Low",
@@ -1281,10 +1275,13 @@ void ImmediateInterpreter::UpdateThumbState(const HardwareState& hwstate) {
       continue;
     float dist_sq = DistanceTravelledSq(fs, true, true);
     float dt = hwstate.timestamp - origin_timestamps_[fs.tracking_id];
+    float dist_sq_min_dt = dist_sq * min_dt;
+    float dist_sq_min_dt_min_dt = dist_sq * min_dt * min_dt;
+    float thumb_speed_sq_thresh_dt_dt = thumb_speed_sq_thresh * dt * dt;
     bool closer_to_origin = dist_sq <= thumb_dist_sq_thresh;
-    bool slower_moved = (dist_sq * min_dt &&
-                         dist_sq * min_dt * min_dt <
-                         thumb_speed_sq_thresh * dt * dt);
+    bool slower_moved = (dist_sq_min_dt &&
+                         dist_sq_min_dt_min_dt <
+                         thumb_speed_sq_thresh_dt_dt);
     bool relatively_motionless = closer_to_origin || slower_moved;
     bool likely_thumb =
         (fs.pressure > min_pressure + two_finger_pressure_diff_thresh_.val_ &&
@@ -2045,7 +2042,6 @@ const char* ImmediateInterpreter::TapToClickStateName(TapToClickState state) {
     case kTtcIdle: return "Idle";
     case kTtcFirstTapBegan: return "FirstTapBegan";
     case kTtcTapComplete: return "TapComplete";
-    case kTtcTapUp: return "TapUp";
     case kTtcSubsequentTapBegan: return "SubsequentTapBegan";
     case kTtcDrag: return "Drag";
     case kTtcDragRelease: return "DragRelease";
@@ -2059,7 +2055,6 @@ stime_t ImmediateInterpreter::TimeoutForTtcState(TapToClickState state) {
     case kTtcIdle: return tap_timeout_.val_;
     case kTtcFirstTapBegan: return tap_timeout_.val_;
     case kTtcTapComplete: return inter_tap_timeout_.val_;
-    case kTtcTapUp: return change_timeout_.val_;
     case kTtcSubsequentTapBegan: return tap_timeout_.val_;
     case kTtcDrag: return tap_timeout_.val_;
     case kTtcDragRelease: return tap_drag_timeout_.val_;
@@ -2201,8 +2196,7 @@ void ImmediateInterpreter::UpdateTapState(
   //       ↓ added finger(s)                                                |
   //  ,>[FirstTapBegan] -<right click: send right click, timeout/movement>->|
   //  |    ↓ released all fingers                                           |
-  // ,->[TapComplete*] --<timeout: send up and down or down for click>----->|
-  // |  [TapUp*] --<timeout: send up for click>---------------------------->|
+  // ,->[TapComplete*] --<timeout: send click>----------------------------->|
   // ||    | | two finger touching: send left click.                        |
   // |'----+-'                                                              |
   // |     ↓ add finger(s)                                                  |
@@ -2269,7 +2263,7 @@ void ImmediateInterpreter::UpdateTapState(
           tap_record_.Moving(*hwstate, tap_move_dist_.val_));
       if (tap_record_.TapComplete()) {
         if (!tap_record_.MinTapPressureMet() ||
-	    !tap_record_.FingersBelowMaxAge()) {
+            !tap_record_.FingersBelowMaxAge()) {
           SetTapToClickState(kTtcIdle, now);
         } else if (tap_record_.TapType() == GESTURES_BUTTON_LEFT &&
                    tap_drag_enable_.val_) {
@@ -2284,38 +2278,26 @@ void ImmediateInterpreter::UpdateTapState(
       break;
     case kTtcTapComplete:
       if (!added_fingers.empty()) {
+
         tap_record_.Clear();
         tap_record_.Update(
             *hwstate, *state_buffer_.Get(1), added_fingers, removed_fingers,
             dead_fingers);
+
         // If more than one finger is touching: Send click
         // and return to FirstTapBegan state.
         if (tap_record_.TapType() != GESTURES_BUTTON_LEFT) {
           *buttons_down = *buttons_up = GESTURES_BUTTON_LEFT;
           SetTapToClickState(kTtcFirstTapBegan, now);
         } else {
+          tap_drag_last_motion_time_ = now;
+          tap_drag_finger_was_stationary_ = false;
           SetTapToClickState(kTtcSubsequentTapBegan, now);
         }
       } else if (is_timeout) {
-	*buttons_up = GESTURES_BUTTON_NONE;
-	*buttons_down = tap_record_.MinTapPressureMet() ? tap_record_.TapType() : 0;
-	if (*buttons_down)
-	  SetTapToClickState(kTtcTapUp, now);
-	else
-	  SetTapToClickState(kTtcIdle, now);
-      }
-      break;
-    case kTtcTapUp:
-      if (is_timeout) {
-	*buttons_down = GESTURES_BUTTON_NONE;
-	*buttons_up = tap_record_.TapType();
-        SetTapToClickState(kTtcIdle, now);	
-      }
-      if (!added_fingers.empty()) {
-        tap_record_.Clear();
-        tap_record_.Update(
-            *hwstate, *state_buffer_.Get(1), added_fingers, removed_fingers,
-            dead_fingers);
+        *buttons_down = *buttons_up =
+            tap_record_.MinTapPressureMet() ? tap_record_.TapType() : 0;
+        SetTapToClickState(kTtcIdle, now);
       }
       break;
     case kTtcSubsequentTapBegan:
@@ -2327,6 +2309,15 @@ void ImmediateInterpreter::UpdateTapState(
         tap_record_.Update(*hwstate, *state_buffer_.Get(1), added_fingers,
                            removed_fingers, dead_fingers);
 
+      if (!tap_record_.Motionless(*hwstate, *state_buffer_.Get(1),
+                                  tap_max_movement_.val_)) {
+        tap_drag_last_motion_time_ = now;
+      }
+      if (tap_record_.TapType() == GESTURES_BUTTON_LEFT &&
+          now - tap_drag_last_motion_time_ > tap_drag_stationary_time_.val_) {
+        tap_drag_finger_was_stationary_ = true;
+      }
+
       if (is_timeout || tap_record_.Moving(*hwstate, tap_move_dist_.val_)) {
         if (tap_record_.TapType() == GESTURES_BUTTON_LEFT) {
           if (is_timeout) {
@@ -2336,12 +2327,13 @@ void ImmediateInterpreter::UpdateTapState(
           } else {
             bool drag_delay_met = (now - tap_to_click_state_entered_
                                    > tap_drag_delay_.val_);
-            if (drag_delay_met) {
+            if (drag_delay_met && tap_drag_finger_was_stationary_) {
               *buttons_down = GESTURES_BUTTON_LEFT;
               SetTapToClickState(kTtcDrag, now);
             } else {
-	      *buttons_down = *buttons_up = GESTURES_BUTTON_LEFT;
-	      SetTapToClickState(kTtcIdle, now);
+              *buttons_down = GESTURES_BUTTON_LEFT;
+              *buttons_up = GESTURES_BUTTON_LEFT;
+              SetTapToClickState(kTtcIdle, now);
             }
           }
         } else if (!tap_record_.TapComplete()) {
@@ -2428,9 +2420,6 @@ void ImmediateInterpreter::UpdateTapState(
     case kTtcTapComplete:
       *timeout = TimeoutForTtcState(tap_to_click_state_);
       break;
-    case kTtcTapUp:
-      *timeout = TimeoutForTtcState(tap_to_click_state_);
-      break;    
     case kTtcDragRelease:
       *timeout = TimeoutForTtcState(tap_to_click_state_);
       break;
@@ -2473,21 +2462,6 @@ void ImmediateInterpreter::FillStartPositions(const HardwareState& hwstate) {
   }
 }
 
-int ImmediateInterpreter::
-GetButtonTypeFromPosition(const HardwareState& hwstate) {
-  if (hwstate.finger_cnt <= 0 || hwstate.finger_cnt > 1 || 
-      !button_right_click_zone_enable_.val_) {
-    return GESTURES_BUTTON_LEFT;
-  }
-
-  const FingerState& fs = hwstate.fingers[0];
-  if (fs.position_x > hwprops_->right - button_right_click_zone_size_.val_) {
-    return GESTURES_BUTTON_RIGHT;
-  } 
-
-  return GESTURES_BUTTON_LEFT;
-}
-
 int ImmediateInterpreter::EvaluateButtonType(
     const HardwareState& hwstate, stime_t button_down_time) {
   // Handle T5R2/SemiMT touchpads
@@ -2499,15 +2473,9 @@ int ImmediateInterpreter::EvaluateButtonType(
     return GESTURES_BUTTON_RIGHT;
   }
 
-  // Just return the hardware state button, based on finger position,
-  // if no further analysis is needed.
-  bool finger_update = finger_button_click_.Update(hwstate, button_down_time);
-  if (!finger_update && hwprops_->is_button_pad && 
-      hwstate.buttons_down == GESTURES_BUTTON_LEFT) {
-    return GetButtonTypeFromPosition(hwstate);
-  } else if (!finger_update) {
+  // Just return the hardware state button if no further analysis is needed.
+  if (!finger_button_click_.Update(hwstate, button_down_time))
     return hwstate.buttons_down;
-  }
   Log("EvaluateButtonType: R/C/H: %d/%d/%d",
       finger_button_click_.num_recent(),
       finger_button_click_.num_cold(),
@@ -2699,10 +2667,12 @@ void ImmediateInterpreter::FillResultGesture(
             state_buffer_.Get(1)->timestamp - state_buffer_.Get(2)->timestamp;
         float dist_sq = DistSq(*current, *prev);
         float dist_sq2 = DistSq(*prev, *prev2);
-        if (dist_sq2 * dt &&  // have prev dist and current time
-            dist_sq2 * dt * dt *
-            quick_acceleration_factor_.val_ * quick_acceleration_factor_.val_ <
-            dist_sq * dt2 * dt2) {
+        float dist_sq2_dt = dist_sq2 * dt;
+        float dist_sq2_dt_dt_quick_acceleration_factor_val__quick_acceleration_factor_val_ = dist_sq2 * dt * dt * quick_acceleration_factor_.val_ * quick_acceleration_factor_.val_;
+        float dist_sq_dt2_dt2 = dist_sq * dt2 * dt2;
+        if (dist_sq2_dt &&  // have prev dist and current time
+            dist_sq2_dt_dt_quick_acceleration_factor_val__quick_acceleration_factor_val_ <
+            dist_sq_dt2_dt2) {
           return;
         }
       }
